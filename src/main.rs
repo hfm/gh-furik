@@ -67,7 +67,7 @@ async fn fetch_all_events(
         client.query_closed_pull_requests(from, to, &viewer_login),
     )?;
 
-    let mut items: Vec<_> = [
+    let items: Vec<_> = [
         issue_comments,
         review_contributions,
         opened_issues,
@@ -78,7 +78,6 @@ async fn fetch_all_events(
     .into_iter()
     .flatten()
     .collect();
-    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
     Ok(items)
 }
