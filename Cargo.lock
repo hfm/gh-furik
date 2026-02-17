@@ -648,6 +648,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "futures",
  "octocrab",
  "serde",
  "serde_json",
