@@ -10,6 +10,18 @@ pub enum EventKind {
     PullRequestReviewComment,
 }
 
+impl EventKind {
+    pub fn action_label(&self) -> &'static str {
+        match self {
+            EventKind::IssueComment | EventKind::PullRequestReviewComment => "Comment",
+            EventKind::PullRequestReview => "Reviewed",
+            EventKind::IssueOpened | EventKind::PullRequestOpened => "Opened",
+            EventKind::IssueClosed | EventKind::PullRequestClosed => "Closed",
+            EventKind::PullRequestMerged => "Merged",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventItem {
     pub kind: EventKind,

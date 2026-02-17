@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 pub(crate) const ISSUE_COMMENTS_QUERY: &str = include_str!("queries/issue_comments.graphql");
-pub(crate) const OPENED_ISSUES_QUERY: &str = include_str!("queries/opened_issues.graphql");
 pub(crate) const OPENED_ISSUES_SINCE_QUERY: &str =
     include_str!("queries/opened_issues_since.graphql");
 pub(crate) const OPENED_PULL_REQUESTS_QUERY: &str =
@@ -14,7 +13,7 @@ pub(crate) const SEARCH_COUNT_QUERY: &str = include_str!("queries/search_count.g
 
 pub(crate) enum QueryKind {
     IssueComments,
-    OpenedIssues { since: Option<String> },
+    OpenedIssues { since: String },
     OpenedPullRequests,
 }
 
@@ -22,15 +21,14 @@ impl QueryKind {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             QueryKind::IssueComments => ISSUE_COMMENTS_QUERY,
-            QueryKind::OpenedIssues { since: None } => OPENED_ISSUES_QUERY,
-            QueryKind::OpenedIssues { since: Some(_) } => OPENED_ISSUES_SINCE_QUERY,
+            QueryKind::OpenedIssues { .. } => OPENED_ISSUES_SINCE_QUERY,
             QueryKind::OpenedPullRequests => OPENED_PULL_REQUESTS_QUERY,
         }
     }
 
     pub(crate) fn variables(&self, after: Option<String>) -> Value {
         match self {
-            QueryKind::OpenedIssues { since: Some(since) } => {
+            QueryKind::OpenedIssues { since } => {
                 serde_json::json!({ "after": after, "since": since })
             }
             _ => serde_json::json!({ "after": after }),

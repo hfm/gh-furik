@@ -4,13 +4,12 @@ use super::types::*;
 use valq::query_value;
 
 pub(crate) async fn query_issue_comments(
-    client: &octocrab::Octocrab,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    client: &crate::github::Client,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
-    let stop_from = from;
     fetch_paginated_json(
-        client,
+        client.octocrab(),
         QueryKind::IssueComments,
         move |node| {
             let created_at = parse_datetime(
@@ -40,10 +39,7 @@ pub(crate) async fn query_issue_comments(
             let updated_at = parse_datetime(
                 query_value!(node["updatedAt"] -> str).expect("issue comment missing updatedAt"),
             )?;
-            Ok(match stop_from {
-                Some(from) => updated_at.date_naive() < from,
-                None => false,
-            })
+            Ok(updated_at.date_naive() < from)
         },
     )
     .await

@@ -1,5 +1,6 @@
 mod formatter;
 mod github;
+use crate::github::prelude::*;
 use clap::Parser;
 
 #[derive(clap::Parser, Debug)]
@@ -29,15 +30,22 @@ struct Cli {
         env = "GH_HOST"
     )]
     hostname: String,
+    #[arg(short, long, help = "Use compact list output")]
+    compact: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let Cli { from, to, hostname } = Cli::parse();
+    let Cli {
+        from,
+        to,
+        hostname,
+        compact,
+    } = Cli::parse();
 
-    let client = crate::github::Client::new(&hostname)?;
+    let client = Client::new(&hostname).await?;
     let items = fetch_all_events(&client, from, to).await?;
-    let output = crate::formatter::format_markdown(&hostname, &items);
+    let output = crate::formatter::format_markdown(&hostname, &items, compact);
 
     print!("{output}");
 
@@ -45,12 +53,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn fetch_all_events(
-    client: &crate::github::Client,
+    client: &Client,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
-) -> anyhow::Result<Vec<crate::github::EventItem>> {
-    let viewer_login = client.query_viewer_login().await?;
-
+) -> anyhow::Result<Vec<EventItem>> {
     let (
         issue_comments,
         review_contributions,
@@ -59,12 +65,12 @@ async fn fetch_all_events(
         closed_issues,
         closed_prs,
     ) = tokio::try_join!(
-        client.query_issue_comments(from, to),
-        client.query_pull_request_review_contributions(from, to),
-        client.query_opened_issues(from, to),
-        client.query_opened_pull_requests(from, to),
-        client.query_closed_issues(from, to, &viewer_login),
-        client.query_closed_pull_requests(from, to, &viewer_login),
+        query_issue_comments(client, from, to),
+        query_pull_request_review_contributions(client, from, to),
+        query_opened_issues(client, from, to),
+        query_opened_pull_requests(client, from, to),
+        query_closed_issues(client, from, to),
+        query_closed_pull_requests(client, from, to),
     )?;
 
     let items: Vec<_> = [

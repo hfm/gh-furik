@@ -1,4 +1,4 @@
-use super::fetch::{MAX_PAGES, graphql_data, in_range, normalize_range, parse_datetime};
+use super::fetch::{MAX_PAGES, graphql_data, in_range, parse_datetime};
 use super::queries::REVIEW_CONTRIBUTIONS_QUERY;
 use super::types::*;
 use anyhow::Context;
@@ -6,24 +6,19 @@ use chrono::TimeZone;
 use valq::query_value;
 
 pub(crate) async fn query_pull_request_review_contributions(
-    client: &octocrab::Octocrab,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    client: &crate::github::Client,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
-    let (range_from, range_to) = normalize_range(from, to);
-    if range_from > range_to {
+    if from > to {
         return Ok(Vec::new());
     }
 
     let mut out = Vec::new();
-    let mut current = range_from;
-    while current <= range_to {
+    let mut current = from;
+    while current <= to {
         let candidate = current + chrono::Duration::days(364);
-        let chunk_end = if candidate > range_to {
-            range_to
-        } else {
-            candidate
-        };
+        let chunk_end = if candidate > to { to } else { candidate };
         out.extend(
             query_pull_request_review_contributions_range(client, current, chunk_end).await?,
         );
@@ -37,7 +32,7 @@ pub(crate) async fn query_pull_request_review_contributions(
 }
 
 async fn query_pull_request_review_contributions_range(
-    client: &octocrab::Octocrab,
+    client: &crate::github::Client,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
@@ -55,6 +50,7 @@ async fn query_pull_request_review_contributions_range(
         });
 
         let resp = client
+            .octocrab()
             .graphql::<GraphqlResponse<serde_json::Value>>(&payload)
             .await
             .context("GraphQL review contributions query failed")?;
@@ -88,7 +84,7 @@ async fn query_pull_request_review_contributions_range(
                 let repository = query_value!(pull_request.repository["nameWithOwner"] -> str)
                     .expect("pull request missing repository nameWithOwner");
 
-                if in_range(occurred_at, Some(from), Some(to)) {
+                if in_range(occurred_at, from, to) {
                     out.push(EventItem {
                         kind: EventKind::PullRequestReview,
                         created_at: occurred_at,
@@ -106,7 +102,7 @@ async fn query_pull_request_review_contributions_range(
                             query_value!(comment["createdAt"] -> str)
                                 .expect("review comment missing createdAt"),
                         )?;
-                        if !in_range(created_at, Some(from), Some(to)) {
+                        if !in_range(created_at, from, to) {
                             continue;
                         }
                         let comment_url =

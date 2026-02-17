@@ -9,7 +9,9 @@ mod queries;
 mod types;
 mod viewer;
 
-pub use types::{EventItem, EventKind};
+pub use types::EventItem;
+#[cfg(test)]
+pub use types::EventKind;
 
 pub(crate) use closed_issues::query_closed_issues;
 pub(crate) use closed_pull_requests::query_closed_pull_requests;
