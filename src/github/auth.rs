@@ -7,7 +7,10 @@ fn token_from_env(host: &str) -> Option<String> {
 
     for key in keys {
         if let Ok(token) = std::env::var(key) {
-            return Some(token);
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
         }
     }
 
@@ -69,6 +72,34 @@ mod tests {
 
                 let ghe_token = fetch_token("ghe.example.com").unwrap();
                 assert_eq!(ghe_token, "ghe-token");
+            },
+        );
+    }
+
+    #[test]
+    fn fetch_token_skips_empty_github_token_vars() {
+        with_vars(
+            [
+                ("GH_TOKEN", Some("")),
+                ("GITHUB_TOKEN", Some("github-token")),
+            ],
+            || {
+                let token = fetch_token("github.com").unwrap();
+                assert_eq!(token, "github-token");
+            },
+        );
+    }
+
+    #[test]
+    fn fetch_token_skips_empty_enterprise_token_vars() {
+        with_vars(
+            [
+                ("GH_ENTERPRISE_TOKEN", Some("")),
+                ("GITHUB_ENTERPRISE_TOKEN", Some("ghe-token")),
+            ],
+            || {
+                let token = fetch_token("ghe.example.com").unwrap();
+                assert_eq!(token, "ghe-token");
             },
         );
     }
