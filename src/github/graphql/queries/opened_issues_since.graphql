@@ -1,0 +1,23 @@
+query($after: String, $since: DateTime) {
+  viewer {
+    issues(
+      first: 100
+      after: $after
+      orderBy: { field: CREATED_AT, direction: DESC }
+      filterBy: { since: $since }
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        createdAt
+        url
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+}

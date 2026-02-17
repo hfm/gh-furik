@@ -1,0 +1,16 @@
+name: Rust CI
+description: Run fmt, clippy, and tests (toolchain is set up separately)
+runs:
+  using: composite
+  steps:
+    - name: Cargo fmt
+      run: cargo fmt -- --check
+      shell: bash
+
+    - name: Cargo clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      shell: bash
+
+    - name: Cargo test
+      run: cargo test --all-features
+      shell: bash

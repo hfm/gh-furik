@@ -1,0 +1,22 @@
+query($after: String) {
+  viewer {
+    pullRequests(
+      first: 100
+      after: $after
+      orderBy: { field: CREATED_AT, direction: DESC }
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        createdAt
+        url
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+}

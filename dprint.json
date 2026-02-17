@@ -1,0 +1,4 @@
+{
+  "includes": ["src/github/graphql/queries/**/*.graphql"],
+  "plugins": ["https://plugins.dprint.dev/g-plane/pretty_graphql-v0.2.3.wasm"]
+}

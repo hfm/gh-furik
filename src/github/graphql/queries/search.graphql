@@ -1,0 +1,54 @@
+query($query: String!, $after: String) {
+  search(query: $query, type: ISSUE, first: 50, after: $after) {
+    issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      __typename
+      ... on Issue {
+        url
+        title
+        repository {
+          nameWithOwner
+        }
+        timelineItems(itemTypes: [CLOSED_EVENT], last: 5) {
+          nodes {
+            __typename
+            ... on ClosedEvent {
+              actor {
+                login
+              }
+              createdAt
+            }
+          }
+        }
+      }
+      ... on PullRequest {
+        url
+        title
+        repository {
+          nameWithOwner
+        }
+        timelineItems(itemTypes: [CLOSED_EVENT, MERGED_EVENT], last: 5) {
+          nodes {
+            __typename
+            ... on ClosedEvent {
+              actor {
+                login
+              }
+              createdAt
+            }
+            ... on MergedEvent {
+              actor {
+                login
+              }
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}
