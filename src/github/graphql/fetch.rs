@@ -173,7 +173,7 @@ async fn fetch_search_count(client: &octocrab::Octocrab, query: &str) -> anyhow:
         .get("search")
         .and_then(|search| search.get("issueCount"))
         .and_then(|count| count.as_i64())
-        .expect("search response missing issueCount");
+        .context("search response missing issueCount")?;
     Ok(issue_count as i32)
 }
 
@@ -198,18 +198,20 @@ async fn fetch_search_nodes(
         .await?;
 
         let data = graphql_data(resp)?;
-        let search = data.get("search").expect("search response missing search");
+        let search = data
+            .get("search")
+            .context("search response missing search")?;
         if let Some(nodes) = search.get("nodes").and_then(|nodes| nodes.as_array()) {
             out.extend(nodes.iter().filter(|node| !node.is_null()).cloned());
         }
 
         let page_info = search
             .get("pageInfo")
-            .expect("search response missing pageInfo");
+            .context("search response missing pageInfo")?;
         let has_next_page = page_info
             .get("hasNextPage")
             .and_then(|value| value.as_bool())
-            .expect("search response missing pageInfo.hasNextPage");
+            .context("search response missing pageInfo.hasNextPage")?;
         let end_cursor = page_info
             .get("endCursor")
             .and_then(|value| value.as_str())
@@ -319,14 +321,14 @@ where
         let connection = data
             .get("viewer")
             .and_then(|viewer| viewer.get(query.connection_field()))
-            .expect("GraphQL response missing connection");
+            .context("GraphQL response missing connection")?;
         let page_info = connection
             .get("pageInfo")
-            .expect("GraphQL response missing pageInfo");
+            .context("GraphQL response missing pageInfo")?;
         let has_next_page = page_info
             .get("hasNextPage")
             .and_then(|value| value.as_bool())
-            .expect("GraphQL response missing pageInfo.hasNextPage");
+            .context("GraphQL response missing pageInfo.hasNextPage")?;
         let end_cursor = page_info
             .get("endCursor")
             .and_then(|value| value.as_str())
