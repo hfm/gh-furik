@@ -28,8 +28,7 @@ pub(crate) async fn query_closed_pull_requests(
 }
 
 fn filter_out_closed_when_merged(items: Vec<EventItem>) -> Vec<EventItem> {
-    let mut merged_counts: HashMap<(String, chrono::DateTime<chrono::Utc>), usize> =
-        HashMap::new();
+    let mut merged_counts: HashMap<(String, chrono::DateTime<chrono::Utc>), usize> = HashMap::new();
     for item in items
         .iter()
         .filter(|item| item.kind == EventKind::PullRequestMerged)
@@ -142,19 +141,15 @@ mod tests {
         let actual = filter_out_closed_when_merged(items);
 
         assert_eq!(actual.len(), 2);
-        assert!(
-            actual.iter().any(|item| {
-                item.kind == EventKind::PullRequestClosed
-                    && item.subject_url == "https://example.test/pull/1"
-                    && item.created_at == earlier
-            })
-        );
-        assert!(
-            actual.iter().any(|item| {
-                item.kind == EventKind::PullRequestMerged
-                    && item.subject_url == "https://example.test/pull/1"
-                    && item.created_at == later
-            })
-        );
+        assert!(actual.iter().any(|item| {
+            item.kind == EventKind::PullRequestClosed
+                && item.subject_url == "https://example.test/pull/1"
+                && item.created_at == earlier
+        }));
+        assert!(actual.iter().any(|item| {
+            item.kind == EventKind::PullRequestMerged
+                && item.subject_url == "https://example.test/pull/1"
+                && item.created_at == later
+        }));
     }
 }
