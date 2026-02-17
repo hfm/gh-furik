@@ -14,13 +14,14 @@ gh extension install hfm/gh-furik
 ```bash
 gh furik --from 2025-01-01 --to 2025-01-31
 gh furik --hostname ghe.example.com --from 2025-02-01 --to 2025-02-28
+gh furik --hostname github.com,ghe.example.com --from 2025-02-01 --to 2025-02-28
 gh furik --compact --from 2025-03-01 --to 2025-03-07
 ```
 
 Options:
 - `--from YYYY-MM-DD` start date
 - `--to YYYY-MM-DD` end date
-- `--hostname HOST` target hostname (default: github.com)
+- `--hostname HOST[,HOST...]` target hostname(s) in comma-separated order (default: github.com)
 - `-c, --compact` compact list output
 - Authentication is resolved per host:
   - For `github.com`: `GH_TOKEN` / `GITHUB_TOKEN`
