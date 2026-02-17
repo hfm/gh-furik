@@ -1,73 +1,27 @@
-use super::EventItem;
-use super::auth::fetch_token;
-use super::graphql;
 use anyhow::Context;
-use chrono::NaiveDate;
 
 pub struct Client {
     octocrab: octocrab::Octocrab,
+    viewer_login: String,
 }
 
 impl Client {
-    pub fn new(host: &str) -> anyhow::Result<Self> {
+    pub async fn new(host: &str) -> anyhow::Result<Self> {
         let token = fetch_token(host)?;
         let octocrab = build_github_client(host, token)?;
-        Ok(Self { octocrab })
+        let viewer_login = super::graphql::query_viewer_login(&octocrab).await?;
+        Ok(Self {
+            octocrab,
+            viewer_login,
+        })
     }
 
-    pub async fn query_viewer_login(&self) -> anyhow::Result<String> {
-        graphql::query_viewer_login(&self.octocrab).await
+    pub(crate) fn octocrab(&self) -> &octocrab::Octocrab {
+        &self.octocrab
     }
 
-    pub async fn query_issue_comments(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_issue_comments(&self.octocrab, Some(from), Some(to)).await
-    }
-
-    pub async fn query_pull_request_review_contributions(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_pull_request_review_contributions(&self.octocrab, Some(from), Some(to)).await
-    }
-
-    pub async fn query_opened_issues(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_opened_issues(&self.octocrab, Some(from), Some(to)).await
-    }
-
-    pub async fn query_opened_pull_requests(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_opened_pull_requests(&self.octocrab, Some(from), Some(to)).await
-    }
-
-    pub async fn query_closed_issues(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-        viewer_login: &str,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_closed_issues(&self.octocrab, Some(from), Some(to), viewer_login).await
-    }
-
-    pub async fn query_closed_pull_requests(
-        &self,
-        from: NaiveDate,
-        to: NaiveDate,
-        viewer_login: &str,
-    ) -> anyhow::Result<Vec<EventItem>> {
-        graphql::query_closed_pull_requests(&self.octocrab, Some(from), Some(to), viewer_login)
-            .await
+    pub(crate) fn viewer_login(&self) -> &str {
+        &self.viewer_login
     }
 }
 
@@ -85,5 +39,81 @@ fn api_base_url(host: &str) -> String {
         "https://api.github.com".to_string()
     } else {
         format!("https://{host}/api")
+    }
+}
+
+fn fetch_token(host: &str) -> anyhow::Result<String> {
+    if let Some(token) = token_from_env(host) {
+        return Ok(token);
+    }
+    if let Some(token) = token_from_gh(host) {
+        return Ok(token);
+    }
+
+    anyhow::bail!("token for {host} not found.");
+}
+
+fn token_from_env(host: &str) -> Option<String> {
+    let keys = if host.eq_ignore_ascii_case("github.com") {
+        ["GH_TOKEN", "GITHUB_TOKEN"]
+    } else {
+        ["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]
+    };
+
+    for key in keys {
+        if let Ok(token) = std::env::var(key) {
+            return Some(token);
+        }
+    }
+
+    None
+}
+
+fn token_from_gh(host: &str) -> Option<String> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token", "--secure-storage", "--hostname", host])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() { None } else { Some(token) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fetch_token;
+    use temp_env::with_vars;
+
+    #[test]
+    fn token_prefers_gh_token() {
+        with_vars(
+            [
+                ("GH_TOKEN", Some("gh-token")),
+                ("GITHUB_TOKEN", Some("github-token")),
+            ],
+            || {
+                let token = fetch_token("github.com").unwrap();
+                assert_eq!(token, "gh-token");
+            },
+        );
+    }
+
+    #[test]
+    fn fetch_token_env_differs_by_host() {
+        with_vars(
+            [
+                ("GH_TOKEN", Some("gh-token")),
+                ("GH_ENTERPRISE_TOKEN", Some("ghe-token")),
+            ],
+            || {
+                let github_token = fetch_token("github.com").unwrap();
+                assert_eq!(github_token, "gh-token");
+
+                let ghe_token = fetch_token("ghe.example.com").unwrap();
+                assert_eq!(ghe_token, "ghe-token");
+            },
+        );
     }
 }

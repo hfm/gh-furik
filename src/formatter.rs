@@ -1,8 +1,8 @@
-use crate::github::{EventItem, EventKind};
+use crate::github::EventItem;
 
 const COMMENT_PREVIEW_MAX_LEN: usize = 80;
 
-pub fn format_markdown(host: &str, items: &[EventItem]) -> String {
+pub fn format_markdown(host: &str, items: &[EventItem], compact: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {host}\n\n"));
 
@@ -16,7 +16,7 @@ pub fn format_markdown(host: &str, items: &[EventItem]) -> String {
         a.repository
             .cmp(&b.repository)
             .then(a.subject_url.cmp(&b.subject_url))
-            .then(b.created_at.cmp(&a.created_at))
+            .then(a.created_at.cmp(&b.created_at))
     });
 
     let mut current_repo: Option<&str> = None;
@@ -34,27 +34,42 @@ pub fn format_markdown(host: &str, items: &[EventItem]) -> String {
 
         if current_subject != Some(item.subject_url.as_str()) {
             current_subject = Some(item.subject_url.as_str());
-            if !out.ends_with("\n\n") {
+            if !compact && !out.ends_with("\n\n") {
                 out.push('\n');
             }
-            out.push_str(&format!(
-                "### {} {}\n\n",
-                item.subject_title, item.subject_url
-            ));
+            if compact {
+                out.push_str(&format!("- {} {}\n", item.subject_title, item.subject_url));
+            } else {
+                out.push_str(&format!(
+                    "### {} {}\n\n",
+                    item.subject_title, item.subject_url
+                ));
+            }
         }
 
         let date = item.created_at.date_naive();
-        out.push_str(&format!(
-            "- {date} ({})\n  - {}: {}\n",
-            kind_label(&item.kind),
-            action_label(&item.kind),
-            item.url
-        ));
+        if compact {
+            out.push_str(&format!(
+                "  - {date} {} {}\n",
+                item.kind.action_label(),
+                item.url
+            ));
+        } else {
+            out.push_str(&format!(
+                "- {date} {} {}\n",
+                item.kind.action_label(),
+                item.url
+            ));
+        }
 
         if let Some(body) = item.body.as_ref()
             && let Some(line) = first_line_preview(body)
         {
-            out.push_str("  > ");
+            if compact {
+                out.push_str("    > ");
+            } else {
+                out.push_str("  > ");
+            }
             out.push_str(&line);
             out.push('\n');
         }
@@ -76,33 +91,10 @@ fn first_line_preview(body: &str) -> Option<String> {
     Some(out)
 }
 
-fn kind_label(kind: &EventKind) -> &'static str {
-    match kind {
-        EventKind::IssueComment => "IssueComment",
-        EventKind::PullRequestReviewComment => "PullRequestReviewComment",
-        EventKind::PullRequestReview => "PullRequestReview",
-        EventKind::IssueOpened => "IssueOpened",
-        EventKind::PullRequestOpened => "PullRequestOpened",
-        EventKind::IssueClosed => "IssueClosed",
-        EventKind::PullRequestClosed => "PullRequestClosed",
-        EventKind::PullRequestMerged => "PullRequestMerged",
-    }
-}
-
-fn action_label(kind: &EventKind) -> &'static str {
-    match kind {
-        EventKind::IssueComment
-        | EventKind::PullRequestReviewComment
-        | EventKind::PullRequestReview => "Comment",
-        EventKind::IssueOpened | EventKind::PullRequestOpened => "Opened",
-        EventKind::IssueClosed | EventKind::PullRequestClosed => "Closed",
-        EventKind::PullRequestMerged => "Merged",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::EventKind;
     use chrono::TimeZone;
 
     fn sample_item() -> EventItem {
@@ -119,19 +111,31 @@ mod tests {
 
     #[test]
     fn format_markdown_empty() {
-        let out = format_markdown("github.com", &[]);
+        let out = format_markdown("github.com", &[], false);
         assert!(out.contains("_No activity found._"));
     }
 
     #[test]
     fn format_markdown_single_item() {
         let item = sample_item();
-        let out = format_markdown("github.com", &[item]);
+        let out = format_markdown("github.com", &[item], false);
         assert!(out.contains("# github.com"));
         assert!(out.contains("## o/r"));
         assert!(out.contains("### Issue A https://example.test/issue/1"));
-        assert!(out.contains("Comment: https://example.test/comment/1"));
+        assert!(out.contains("- 2025-01-01 Comment https://example.test/comment/1"));
         assert!(out.contains("> hello"));
+        assert!(!out.contains("> world"));
+    }
+
+    #[test]
+    fn format_markdown_compact_single_item() {
+        let item = sample_item();
+        let out = format_markdown("github.com", &[item], true);
+        assert!(out.contains("# github.com"));
+        assert!(out.contains("## o/r"));
+        assert!(out.contains("- Issue A https://example.test/issue/1"));
+        assert!(out.contains("  - 2025-01-01 Comment https://example.test/comment/1"));
+        assert!(out.contains("    > hello"));
         assert!(!out.contains("> world"));
     }
 }

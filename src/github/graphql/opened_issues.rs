@@ -4,12 +4,12 @@ use super::types::*;
 use valq::query_value;
 
 pub(crate) async fn query_opened_issues(
-    client: &octocrab::Octocrab,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    client: &crate::github::Client,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
     fetch_paginated_json(
-        client,
+        client.octocrab(),
         QueryKind::OpenedIssues {
             since: issue_since(from),
         },
@@ -39,10 +39,7 @@ pub(crate) async fn query_opened_issues(
             let created_at = parse_datetime(
                 query_value!(node["createdAt"] -> str).expect("issue missing createdAt"),
             )?;
-            Ok(match from {
-                Some(from) => created_at.date_naive() < from,
-                None => false,
-            })
+            Ok(created_at.date_naive() < from)
         },
     )
     .await

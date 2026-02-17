@@ -4,12 +4,12 @@ use super::types::*;
 use valq::query_value;
 
 pub(crate) async fn query_opened_pull_requests(
-    client: &octocrab::Octocrab,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    client: &crate::github::Client,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
     fetch_paginated_json(
-        client,
+        client.octocrab(),
         QueryKind::OpenedPullRequests,
         move |node| {
             let created_at = parse_datetime(
@@ -37,10 +37,7 @@ pub(crate) async fn query_opened_pull_requests(
             let created_at = parse_datetime(
                 query_value!(node["createdAt"] -> str).expect("pull request missing createdAt"),
             )?;
-            Ok(match from {
-                Some(from) => created_at.date_naive() < from,
-                None => false,
-            })
+            Ok(created_at.date_naive() < from)
         },
     )
     .await

@@ -14,8 +14,8 @@ const SEARCH_RETRIES: usize = 3;
 pub(super) fn event_items_from_search_node(
     node: &serde_json::Value,
     viewer_login: &str,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> Vec<EventItem> {
     let mut items = Vec::new();
 
@@ -91,11 +91,26 @@ pub(super) async fn fetch_search_nodes_range(
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let mut ranges = Vec::new();
-    ranges.push((from, to));
+    let ranges = split_ranges_by_count(client, query_base, from, to).await?;
+    let mut out = Vec::new();
+    for (start, end) in ranges {
+        let query = search_query(query_base, start, end);
+        out.extend(fetch_search_nodes(client, &query).await?);
+    }
+    Ok(out)
+}
+
+async fn split_ranges_by_count(
+    client: &octocrab::Octocrab,
+    query_base: &str,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+) -> anyhow::Result<Vec<(chrono::NaiveDate, chrono::NaiveDate)>> {
+    let mut pending = Vec::new();
+    pending.push((from, to));
 
     let mut out = Vec::new();
-    while let Some((start, end)) = ranges.pop() {
+    while let Some((start, end)) = pending.pop() {
         if start > end {
             continue;
         }
@@ -109,19 +124,19 @@ pub(super) async fn fetch_search_nodes_range(
         if count > SEARCH_LIMIT {
             if start == end {
                 eprintln!("Too many results from={} to={} count={}", start, end, count);
-                out.extend(fetch_search_nodes(client, &query).await?);
+                out.push((start, end));
                 continue;
             }
 
             let mid = midpoint_date(start, end);
             if let Some(next_day) = mid.succ_opt() {
-                ranges.push((next_day, end));
+                pending.push((next_day, end));
             }
-            ranges.push((start, mid));
+            pending.push((start, mid));
             continue;
         }
 
-        out.extend(fetch_search_nodes(client, &query).await?);
+        out.push((start, end));
     }
 
     Ok(out)
@@ -169,9 +184,9 @@ async fn fetch_search_count(client: &octocrab::Octocrab, query: &str) -> anyhow:
     .await?;
 
     let data = graphql_data(resp)?;
-    let issue_count = data
-        .get("search")
-        .and_then(|search| search.get("issueCount"))
+    let search = data.get("search").expect("search response missing search");
+    let issue_count = search
+        .get("issueCount")
         .and_then(|count| count.as_i64())
         .context("search response missing issueCount")?;
     Ok(issue_count as i32)
@@ -242,19 +257,9 @@ fn midpoint_date(from: chrono::NaiveDate, to: chrono::NaiveDate) -> chrono::Naiv
     from + chrono::Duration::days(days / 2)
 }
 
-pub(super) fn normalize_range(
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
-) -> (chrono::NaiveDate, chrono::NaiveDate) {
-    let start = from.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
-    let end = to.unwrap_or_else(|| chrono::Utc::now().date_naive());
-    (start, end)
-}
-
-pub(super) fn issue_since(from: Option<chrono::NaiveDate>) -> Option<String> {
-    let from = from?;
-    let start = from.and_hms_opt(0, 0, 0)?;
-    Some(chrono::Utc.from_utc_datetime(&start).to_rfc3339())
+pub(super) fn issue_since(from: chrono::NaiveDate) -> String {
+    let start = from.and_hms_opt(0, 0, 0).expect("invalid start of day");
+    chrono::Utc.from_utc_datetime(&start).to_rfc3339()
 }
 
 pub(super) fn graphql_data<T>(resp: GraphqlResponse<T>) -> anyhow::Result<T> {
@@ -271,18 +276,14 @@ pub(super) fn graphql_data<T>(resp: GraphqlResponse<T>) -> anyhow::Result<T> {
 
 pub(super) fn in_range(
     dt: chrono::DateTime<chrono::Utc>,
-    from: Option<chrono::NaiveDate>,
-    to: Option<chrono::NaiveDate>,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
 ) -> bool {
     let date = dt.date_naive();
-    if let Some(from) = from
-        && date < from
-    {
+    if date < from {
         return false;
     }
-    if let Some(to) = to
-        && date > to
-    {
+    if date > to {
         return false;
     }
     true
@@ -375,17 +376,11 @@ mod tests {
     }
 
     #[test]
-    fn in_range_allows_open_bounds() {
-        assert!(in_range(dt("2025-01-02"), None, None));
+    fn in_range_accepts_inside_bounds() {
         assert!(in_range(
             dt("2025-01-02"),
-            Some(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()),
-            None
-        ));
-        assert!(in_range(
-            dt("2025-01-02"),
-            None,
-            Some(NaiveDate::from_ymd_opt(2025, 1, 3).unwrap())
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
         ));
     }
 
@@ -393,13 +388,13 @@ mod tests {
     fn in_range_rejects_outside_bounds() {
         assert!(!in_range(
             dt("2024-12-31"),
-            Some(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()),
-            None
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         ));
         assert!(!in_range(
             dt("2025-02-01"),
-            None,
-            Some(NaiveDate::from_ymd_opt(2025, 1, 31).unwrap())
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         ));
     }
 }
