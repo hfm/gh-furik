@@ -83,6 +83,7 @@ fn token_from_gh(host: &str) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).context("failed to execute `gh auth token`"),
     };
+
     if !output.status.success() {
         return Ok(None);
     }
