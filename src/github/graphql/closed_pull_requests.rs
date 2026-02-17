@@ -1,6 +1,6 @@
 use super::fetch::{event_items_from_search_node, fetch_search_nodes_range};
 use super::types::{EventItem, EventKind};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 pub(crate) async fn query_closed_pull_requests(
     client: &crate::github::Client,
@@ -28,17 +28,31 @@ pub(crate) async fn query_closed_pull_requests(
 }
 
 fn filter_out_closed_when_merged(items: Vec<EventItem>) -> Vec<EventItem> {
-    let merged_subjects: HashSet<_> = items
+    let mut merged_counts: HashMap<(String, chrono::DateTime<chrono::Utc>), usize> =
+        HashMap::new();
+    for item in items
         .iter()
         .filter(|item| item.kind == EventKind::PullRequestMerged)
-        .map(|item| item.subject_url.clone())
-        .collect();
+    {
+        let key = (item.subject_url.clone(), item.created_at);
+        *merged_counts.entry(key).or_insert(0) += 1;
+    }
 
     items
         .into_iter()
         .filter(|item| {
-            !(item.kind == EventKind::PullRequestClosed
-                && merged_subjects.contains(item.subject_url.as_str()))
+            if item.kind != EventKind::PullRequestClosed {
+                return true;
+            }
+
+            let key = (item.subject_url.clone(), item.created_at);
+            if let Some(count) = merged_counts.get_mut(&key)
+                && *count > 0
+            {
+                *count -= 1;
+                return false;
+            }
+            true
         })
         .collect()
 }
@@ -88,6 +102,59 @@ mod tests {
                 .iter()
                 .any(|item| item.kind == EventKind::PullRequestClosed
                     && item.subject_url == "https://example.test/pull/1")
+        );
+    }
+
+    #[test]
+    fn keeps_earlier_closed_before_later_merge() {
+        let earlier = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let later = chrono::Utc.with_ymd_and_hms(2025, 1, 2, 0, 0, 0).unwrap();
+        let items = vec![
+            EventItem {
+                kind: EventKind::PullRequestClosed,
+                created_at: earlier,
+                url: "https://example.test/pull/1".to_string(),
+                body: None,
+                repository: "owner/repo".to_string(),
+                subject_title: "Sample PR".to_string(),
+                subject_url: "https://example.test/pull/1".to_string(),
+            },
+            EventItem {
+                kind: EventKind::PullRequestClosed,
+                created_at: later,
+                url: "https://example.test/pull/1".to_string(),
+                body: None,
+                repository: "owner/repo".to_string(),
+                subject_title: "Sample PR".to_string(),
+                subject_url: "https://example.test/pull/1".to_string(),
+            },
+            EventItem {
+                kind: EventKind::PullRequestMerged,
+                created_at: later,
+                url: "https://example.test/pull/1".to_string(),
+                body: None,
+                repository: "owner/repo".to_string(),
+                subject_title: "Sample PR".to_string(),
+                subject_url: "https://example.test/pull/1".to_string(),
+            },
+        ];
+
+        let actual = filter_out_closed_when_merged(items);
+
+        assert_eq!(actual.len(), 2);
+        assert!(
+            actual.iter().any(|item| {
+                item.kind == EventKind::PullRequestClosed
+                    && item.subject_url == "https://example.test/pull/1"
+                    && item.created_at == earlier
+            })
+        );
+        assert!(
+            actual.iter().any(|item| {
+                item.kind == EventKind::PullRequestMerged
+                    && item.subject_url == "https://example.test/pull/1"
+                    && item.created_at == later
+            })
         );
     }
 }
