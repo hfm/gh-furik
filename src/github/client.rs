@@ -46,11 +46,13 @@ fn fetch_token(host: &str) -> anyhow::Result<String> {
     if let Some(token) = token_from_env(host) {
         return Ok(token);
     }
-    if let Some(token) = token_from_gh(host) {
+    if let Some(token) = token_from_gh(host)? {
         return Ok(token);
     }
 
-    anyhow::bail!("token for {host} not found.");
+    anyhow::bail!(
+        "token for {host} not found. Please set `GH_TOKEN` or log in with `gh auth login`."
+    );
 }
 
 fn token_from_env(host: &str) -> Option<String> {
@@ -72,16 +74,20 @@ fn token_from_env(host: &str) -> Option<String> {
     None
 }
 
-fn token_from_gh(host: &str) -> Option<String> {
-    let output = std::process::Command::new("gh")
+fn token_from_gh(host: &str) -> anyhow::Result<Option<String>> {
+    let output = match std::process::Command::new("gh")
         .args(["auth", "token", "--secure-storage", "--hostname", host])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context("failed to execute `gh auth token`"),
+    };
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() { None } else { Some(token) }
+    Ok(if token.is_empty() { None } else { Some(token) })
 }
 
 #[cfg(test)]
