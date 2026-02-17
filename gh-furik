@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+set -e
+
+REPO="hfm/gh-furik"
+EXE="gh-furik"
+
+ROOT_DIR=$(cd "$(dirname "$0")" && pwd)
+BIN_DIR="$ROOT_DIR/bin"
+LOCAL_BIN="$ROOT_DIR/target/release/$EXE"
+
+os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+arch=$(uname -m 2>/dev/null)
+case "$arch" in
+  x86_64|amd64) arch="amd64" ;;
+  arm64|aarch64) arch="arm64" ;;
+esac
+
+asset="$EXE-$os-$arch"
+RELEASE_BIN="$BIN_DIR/$asset"
+
+if [ -x "$RELEASE_BIN" ]; then
+  exec "$RELEASE_BIN" "$@"
+fi
+
+if [ -x "$LOCAL_BIN" ]; then
+  exec "$LOCAL_BIN" "$@"
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "error: gh is required to download release assets" 1>&2
+  exit 1
+fi
+
+mkdir -p "$BIN_DIR"
+if ! gh release download --repo "$REPO" --pattern "$asset" --dir "$BIN_DIR"; then
+  echo "error: release asset not found for ${os}/${arch}" 1>&2
+  exit 1
+fi
+chmod +x "$RELEASE_BIN"
+exec "$RELEASE_BIN" "$@"

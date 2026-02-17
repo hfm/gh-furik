@@ -1,0 +1,27 @@
+query($after: String) {
+  viewer {
+    issueComments(
+      first: 100
+      after: $after
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        createdAt
+        updatedAt
+        url
+        body
+        issue {
+          title
+          url
+          repository {
+            nameWithOwner
+          }
+        }
+      }
+    }
+  }
+}

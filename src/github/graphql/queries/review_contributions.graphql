@@ -1,0 +1,33 @@
+query($from: DateTime!, $to: DateTime!, $after: String) {
+  viewer {
+    contributionsCollection(from: $from, to: $to) {
+      pullRequestReviewContributions(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          occurredAt
+          pullRequestReview {
+            url
+            body
+            pullRequest {
+              title
+              url
+              repository {
+                nameWithOwner
+              }
+            }
+            comments(first: 100) {
+              nodes {
+                createdAt
+                url
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

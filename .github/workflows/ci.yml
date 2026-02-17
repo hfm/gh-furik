@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Lint GraphQL
+        uses: dprint/check@v2
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Rust CI
+        uses: ./.github/actions/rust-ci

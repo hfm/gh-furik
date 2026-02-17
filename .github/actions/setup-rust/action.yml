@@ -1,0 +1,18 @@
+name: Setup Rust
+description: Install Rust toolchain and enable caching
+inputs:
+  targets:
+    description: Additional compilation targets (comma-separated)
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+        targets: ${{ inputs.targets }}
+
+    - name: Cache cargo artifacts
+      uses: Swatinem/rust-cache@v2
