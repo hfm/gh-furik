@@ -263,4 +263,24 @@ mod tests {
             "  > 12345678901234567890123456789012345678901234567890123456789012345678901234567890... ..."
         );
     }
+
+    #[test]
+    fn format_markdown_opened_issue_shows_three_line_preview() {
+        let item = EventItem {
+            kind: EventKind::IssueOpened,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 4, 0, 0, 0).unwrap(),
+            url: "https://example.test/issue-event/3".to_string(),
+            body: Some("i line 1\ni line 2\ni line 3\ni line 4".to_string()),
+            repository: "o/r".to_string(),
+            subject_title: "Issue C".to_string(),
+            subject_url: "https://example.test/issues/3".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], false);
+
+        assert!(out.contains("- 2025-01-04 Opened\n"));
+        assert!(out.contains("  > i line 1"));
+        assert!(out.contains("  > i line 2"));
+        assert!(out.contains("  > i line 3 ..."));
+        assert!(!out.contains("i line 4"));
+    }
 }
