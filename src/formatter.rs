@@ -62,13 +62,12 @@ pub fn format_markdown(host: &str, items: &[EventItem], compact: bool) -> String
         }
 
         if let Some(body) = item.body.as_ref()
-            && let Some(preview) = body_preview(body, preview_line_limit(action_label))
+            && let Some(preview) = body_preview(
+                body,
+                preview_line_limit(action_label),
+                if compact { "    > " } else { "  > " },
+            )
         {
-            if compact {
-                out.push_str("    > ");
-            } else {
-                out.push_str("  > ");
-            }
             out.push_str(&preview);
             out.push('\n');
         }
@@ -77,7 +76,7 @@ pub fn format_markdown(host: &str, items: &[EventItem], compact: bool) -> String
     out
 }
 
-fn body_preview(body: &str, max_lines: usize) -> Option<String> {
+fn body_preview(body: &str, max_lines: usize, line_prefix: &str) -> Option<String> {
     if max_lines == 0 {
         return None;
     }
@@ -111,7 +110,13 @@ fn body_preview(body: &str, max_lines: usize) -> Option<String> {
         }
     }
 
-    Some(lines.join("\n  > "))
+    Some(
+        lines
+            .into_iter()
+            .map(|line| format!("{line_prefix}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn preview_line_limit(action_label: &str) -> usize {
@@ -228,5 +233,22 @@ mod tests {
         assert!(out.contains("  > description line 2"));
         assert!(out.contains("  > description line 3 ..."));
         assert!(!out.contains("description line 4"));
+    }
+
+    #[test]
+    fn format_markdown_compact_opened_pr_keeps_preview_indentation_for_all_lines() {
+        let item = EventItem {
+            kind: EventKind::PullRequestOpened,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 3, 0, 0, 0).unwrap(),
+            url: "https://example.test/pr-event/2".to_string(),
+            body: Some("line 1\nline 2\nline 3".to_string()),
+            repository: "o/r".to_string(),
+            subject_title: "PR B".to_string(),
+            subject_url: "https://example.test/pull/2".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], true);
+
+        assert!(out.contains("    > line 1\n    > line 2\n    > line 3"));
+        assert!(!out.contains("\n  > line 2"));
     }
 }
