@@ -397,4 +397,32 @@ mod tests {
             NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         ));
     }
+
+    #[test]
+    fn event_items_from_search_node_does_not_set_body_for_closed_event() {
+        let node = serde_json::json!({
+            "__typename": "PullRequest",
+            "url": "https://example.test/pull/1",
+            "title": "PR A",
+            "repository": { "nameWithOwner": "o/r" },
+            "timelineItems": {
+                "nodes": [{
+                    "__typename": "ClosedEvent",
+                    "actor": { "login": "me" },
+                    "createdAt": "2025-01-10T00:00:00Z"
+                }]
+            }
+        });
+
+        let items = event_items_from_search_node(
+            &node,
+            "me",
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, EventKind::PullRequestClosed);
+        assert_eq!(items[0].body, None);
+    }
 }

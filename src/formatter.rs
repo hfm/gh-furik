@@ -48,29 +48,27 @@ pub fn format_markdown(host: &str, items: &[EventItem], compact: bool) -> String
         }
 
         let date = item.created_at.date_naive();
+        let action_label = item.kind.action_label();
         if compact {
-            out.push_str(&format!(
-                "  - {date} {} {}\n",
-                item.kind.action_label(),
-                item.url
-            ));
+            if should_include_event_url(action_label) {
+                out.push_str(&format!("  - {date} {} {}\n", action_label, item.url));
+            } else {
+                out.push_str(&format!("  - {date} {}\n", action_label));
+            }
+        } else if should_include_event_url(action_label) {
+            out.push_str(&format!("- {date} {} {}\n", action_label, item.url));
         } else {
-            out.push_str(&format!(
-                "- {date} {} {}\n",
-                item.kind.action_label(),
-                item.url
-            ));
+            out.push_str(&format!("- {date} {}\n", action_label));
         }
 
         if let Some(body) = item.body.as_ref()
-            && let Some(line) = first_line_preview(body)
+            && let Some(preview) = body_preview(
+                body,
+                preview_line_limit(action_label),
+                if compact { "    > " } else { "  > " },
+            )
         {
-            if compact {
-                out.push_str("    > ");
-            } else {
-                out.push_str("  > ");
-            }
-            out.push_str(&line);
+            out.push_str(&preview);
             out.push('\n');
         }
     }
@@ -78,17 +76,56 @@ pub fn format_markdown(host: &str, items: &[EventItem], compact: bool) -> String
     out
 }
 
-fn first_line_preview(body: &str) -> Option<String> {
-    let line = body.lines().next()?.trim();
-    if line.is_empty() {
+fn body_preview(body: &str, max_lines: usize, line_prefix: &str) -> Option<String> {
+    if max_lines == 0 {
         return None;
     }
-    if line.chars().count() <= COMMENT_PREVIEW_MAX_LEN {
-        return Some(line.to_string());
+
+    let mut lines = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(max_lines + 1)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        return None;
     }
-    let mut out: String = line.chars().take(COMMENT_PREVIEW_MAX_LEN).collect();
-    out.push_str("...");
-    Some(out)
+
+    let has_more = lines.len() > max_lines;
+    if has_more {
+        lines.truncate(max_lines);
+    }
+
+    let last_index = lines.len() - 1;
+    for (index, line) in lines.iter_mut().enumerate() {
+        let is_last = index == last_index;
+        if line.chars().count() > COMMENT_PREVIEW_MAX_LEN {
+            let mut out: String = line.chars().take(COMMENT_PREVIEW_MAX_LEN).collect();
+            out.push_str("...");
+            *line = out;
+        }
+        if has_more && is_last {
+            line.push_str(" ...");
+        }
+    }
+
+    Some(
+        lines
+            .into_iter()
+            .map(|line| format!("{line_prefix}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn preview_line_limit(action_label: &str) -> usize {
+    if action_label == "Opened" { 3 } else { 1 }
+}
+
+fn should_include_event_url(action_label: &str) -> bool {
+    !matches!(action_label, "Opened" | "Closed" | "Merged")
 }
 
 #[cfg(test)]
@@ -137,5 +174,113 @@ mod tests {
         assert!(out.contains("  - 2025-01-01 Comment https://example.test/comment/1"));
         assert!(out.contains("    > hello"));
         assert!(!out.contains("> world"));
+    }
+
+    #[test]
+    fn format_markdown_merged_event_omits_event_url() {
+        let item = EventItem {
+            kind: EventKind::PullRequestMerged,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 2, 0, 0, 0).unwrap(),
+            url: "https://example.test/pr-event/1".to_string(),
+            body: None,
+            repository: "o/r".to_string(),
+            subject_title: "PR A".to_string(),
+            subject_url: "https://example.test/pull/1".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], false);
+
+        assert!(out.contains("### PR A https://example.test/pull/1"));
+        assert!(out.contains("- 2025-01-02 Merged\n"));
+        assert!(!out.contains("- 2025-01-02 Merged https://example.test/pr-event/1"));
+    }
+
+    #[test]
+    fn format_markdown_compact_merged_event_omits_event_url() {
+        let item = EventItem {
+            kind: EventKind::PullRequestMerged,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 2, 0, 0, 0).unwrap(),
+            url: "https://example.test/pr-event/1".to_string(),
+            body: None,
+            repository: "o/r".to_string(),
+            subject_title: "PR A".to_string(),
+            subject_url: "https://example.test/pull/1".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], true);
+
+        assert!(out.contains("- PR A https://example.test/pull/1"));
+        assert!(out.contains("  - 2025-01-02 Merged\n"));
+        assert!(!out.contains("  - 2025-01-02 Merged https://example.test/pr-event/1"));
+    }
+
+    #[test]
+    fn format_markdown_opened_pr_shows_body_preview_without_event_url() {
+        let item = EventItem {
+            kind: EventKind::PullRequestOpened,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 3, 0, 0, 0).unwrap(),
+            url: "https://example.test/pr-event/2".to_string(),
+            body: Some(
+                "description line 1\ndescription line 2\ndescription line 3\ndescription line 4"
+                    .to_string(),
+            ),
+            repository: "o/r".to_string(),
+            subject_title: "PR B".to_string(),
+            subject_url: "https://example.test/pull/2".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], false);
+
+        assert!(out.contains("- 2025-01-03 Opened\n"));
+        assert!(!out.contains("- 2025-01-03 Opened https://example.test/pr-event/2"));
+        assert!(out.contains("  > description line 1"));
+        assert!(out.contains("  > description line 2"));
+        assert!(out.contains("  > description line 3 ..."));
+        assert!(!out.contains("description line 4"));
+    }
+
+    #[test]
+    fn format_markdown_compact_opened_pr_keeps_preview_indentation_for_all_lines() {
+        let item = EventItem {
+            kind: EventKind::PullRequestOpened,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 3, 0, 0, 0).unwrap(),
+            url: "https://example.test/pr-event/2".to_string(),
+            body: Some("line 1\nline 2\nline 3".to_string()),
+            repository: "o/r".to_string(),
+            subject_title: "PR B".to_string(),
+            subject_url: "https://example.test/pull/2".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], true);
+
+        assert!(out.contains("    > line 1\n    > line 2\n    > line 3"));
+        assert!(!out.contains("\n  > line 2"));
+    }
+
+    #[test]
+    fn body_preview_shows_both_truncation_and_more_indicator() {
+        let body = "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890\nsecond";
+        let preview = body_preview(body, 1, "  > ").unwrap();
+
+        assert_eq!(
+            preview,
+            "  > 12345678901234567890123456789012345678901234567890123456789012345678901234567890... ..."
+        );
+    }
+
+    #[test]
+    fn format_markdown_opened_issue_shows_three_line_preview() {
+        let item = EventItem {
+            kind: EventKind::IssueOpened,
+            created_at: chrono::Utc.with_ymd_and_hms(2025, 1, 4, 0, 0, 0).unwrap(),
+            url: "https://example.test/issue-event/3".to_string(),
+            body: Some("i line 1\ni line 2\ni line 3\ni line 4".to_string()),
+            repository: "o/r".to_string(),
+            subject_title: "Issue C".to_string(),
+            subject_url: "https://example.test/issues/3".to_string(),
+        };
+        let out = format_markdown("github.com", &[item], false);
+
+        assert!(out.contains("- 2025-01-04 Opened\n"));
+        assert!(out.contains("  > i line 1"));
+        assert!(out.contains("  > i line 2"));
+        assert!(out.contains("  > i line 3 ..."));
+        assert!(!out.contains("i line 4"));
     }
 }
