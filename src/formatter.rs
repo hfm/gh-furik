@@ -105,7 +105,8 @@ fn body_preview(body: &str, max_lines: usize, line_prefix: &str) -> Option<Strin
             let mut out: String = line.chars().take(COMMENT_PREVIEW_MAX_LEN).collect();
             out.push_str("...");
             *line = out;
-        } else if has_more && is_last {
+        }
+        if has_more && is_last {
             line.push_str(" ...");
         }
     }
@@ -250,5 +251,16 @@ mod tests {
 
         assert!(out.contains("    > line 1\n    > line 2\n    > line 3"));
         assert!(!out.contains("\n  > line 2"));
+    }
+
+    #[test]
+    fn body_preview_shows_both_truncation_and_more_indicator() {
+        let body = "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890\nsecond";
+        let preview = body_preview(body, 1, "  > ").unwrap();
+
+        assert_eq!(
+            preview,
+            "  > 12345678901234567890123456789012345678901234567890123456789012345678901234567890... ..."
+        );
     }
 }
