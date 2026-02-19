@@ -13,6 +13,7 @@ query($after: String) {
         createdAt
         url
         title
+        body
         repository {
           nameWithOwner
         }
