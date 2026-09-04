@@ -1,0 +1,43 @@
+query($query: String!, $author: String!, $after: String) {
+  search(query: $query, type: ISSUE, first: 50, after: $after) {
+    issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      __typename
+      ... on PullRequest {
+        id
+        url
+        title
+        repository {
+          nameWithOwner
+        }
+        reviews(first: 50, author: $author) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            submittedAt
+            url
+            body
+            comments(first: 100) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                createdAt
+                url
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

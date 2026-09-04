@@ -1,0 +1,29 @@
+query($id: ID!, $author: String!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      reviews(first: 50, after: $after, author: $author) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          submittedAt
+          url
+          body
+          comments(first: 100) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              createdAt
+              url
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}
