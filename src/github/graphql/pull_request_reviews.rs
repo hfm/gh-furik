@@ -31,7 +31,12 @@ pub(crate) async fn query_pull_request_review_contributions(
 
     let mut out = Vec::new();
     for node in &nodes {
-        out.extend(event_items_from_reviewed_pull_request(node, from, to)?);
+        out.extend(event_items_from_reviewed_pull_request(
+            node,
+            client.viewer_login(),
+            from,
+            to,
+        )?);
         out.extend(fetch_additional_review_events(client, node, from, to).await?);
     }
     Ok(out)
@@ -39,6 +44,7 @@ pub(crate) async fn query_pull_request_review_contributions(
 
 fn event_items_from_reviewed_pull_request(
     node: &serde_json::Value,
+    viewer_login: &str,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
@@ -59,6 +65,7 @@ fn event_items_from_reviewed_pull_request(
             subject_title,
             subject_url,
             repository,
+            viewer_login,
             from,
             to,
         )?);
@@ -72,6 +79,7 @@ fn event_items_from_review(
     subject_title: &str,
     subject_url: &str,
     repository: &str,
+    viewer_login: &str,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
@@ -102,6 +110,7 @@ fn event_items_from_review(
                 subject_title,
                 subject_url,
                 repository,
+                viewer_login,
                 from,
                 to,
             )? {
@@ -118,9 +127,13 @@ fn event_item_from_review_comment(
     subject_title: &str,
     subject_url: &str,
     repository: &str,
+    viewer_login: &str,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Option<EventItem>> {
+    if query_value!(comment.author.login -> str) != Some(viewer_login) {
+        return Ok(None);
+    }
     let created_at = parse_datetime(
         query_value!(comment["createdAt"] -> str).expect("review comment missing createdAt"),
     )?;
@@ -212,6 +225,7 @@ async fn fetch_additional_review_events(
                     subject_title,
                     subject_url,
                     repository,
+                    client.viewer_login(),
                     from,
                     to,
                 )?);
@@ -281,6 +295,7 @@ async fn fetch_additional_review_comments(
                     subject_title,
                     subject_url,
                     repository,
+                    client.viewer_login(),
                     from,
                     to,
                 )? {
@@ -339,14 +354,19 @@ mod tests {
             "url": "https://example.test/pull/1#pullrequestreview-1",
             "body": "LGTM",
             "comments": { "nodes": [
-                { "createdAt": "2025-01-02T09:00:00Z", "url": "https://example.test/pull/1#discussion_r1", "body": "nit" },
-                { "createdAt": "2025-02-01T09:00:00Z", "url": "https://example.test/pull/1#discussion_r2", "body": "late" }
+                { "createdAt": "2025-01-02T09:00:00Z", "url": "https://example.test/pull/1#discussion_r1", "body": "nit", "author": { "login": "viewer" } },
+                { "createdAt": "2025-01-02T09:30:00Z", "url": "https://example.test/pull/1#discussion_r2", "body": "reply", "author": { "login": "someone-else" } },
+                { "createdAt": "2025-02-01T09:00:00Z", "url": "https://example.test/pull/1#discussion_r3", "body": "late", "author": { "login": "viewer" } }
             ] }
         }]));
 
-        let items =
-            event_items_from_reviewed_pull_request(&node, date("2025-01-01"), date("2025-01-31"))
-                .unwrap();
+        let items = event_items_from_reviewed_pull_request(
+            &node,
+            "viewer",
+            date("2025-01-01"),
+            date("2025-01-31"),
+        )
+        .unwrap();
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].kind, EventKind::PullRequestReview);
@@ -374,9 +394,13 @@ mod tests {
             }
         ]));
 
-        let items =
-            event_items_from_reviewed_pull_request(&node, date("2025-01-01"), date("2025-01-31"))
-                .unwrap();
+        let items = event_items_from_reviewed_pull_request(
+            &node,
+            "viewer",
+            date("2025-01-01"),
+            date("2025-01-31"),
+        )
+        .unwrap();
 
         assert!(items.is_empty());
     }

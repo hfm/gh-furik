@@ -20,6 +20,9 @@ query($id: ID!, $author: String!, $after: String) {
               createdAt
               url
               body
+              author {
+                login
+              }
             }
           }
         }

@@ -33,6 +33,9 @@ query($query: String!, $author: String!, $after: String) {
                 createdAt
                 url
                 body
+                author {
+                  login
+                }
               }
             }
           }
