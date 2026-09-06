@@ -161,6 +161,9 @@ where
     for attempt in 1..=SEARCH_RETRIES {
         match client.graphql::<T>(payload).await {
             Ok(resp) => return Ok(resp),
+            Err(err @ octocrab::Error::Graphql { .. }) => {
+                return Err(anyhow::Error::new(err)).context(context);
+            }
             Err(err) => {
                 if attempt == SEARCH_RETRIES {
                     return Err(anyhow::Error::new(err)).context(context);
@@ -184,14 +187,10 @@ async fn fetch_search_count(client: &octocrab::Octocrab, query: &str) -> anyhow:
         "variables": { "query": query },
     });
 
-    let resp = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
-        client,
-        &payload,
-        "GraphQL search query failed",
-    )
-    .await?;
+    let data =
+        graphql_with_retry::<serde_json::Value>(client, &payload, "GraphQL search query failed")
+            .await?;
 
-    let data = graphql_data(resp)?;
     let search = data.get("search").expect("search response missing search");
     let issue_count = search
         .get("issueCount")
@@ -219,14 +218,13 @@ async fn fetch_search_nodes(
             "variables": variables,
         });
 
-        let resp = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
+        let data = graphql_with_retry::<serde_json::Value>(
             client,
             &payload,
             "GraphQL search query failed",
         )
         .await?;
 
-        let data = graphql_data(resp)?;
         let search = data
             .get("search")
             .context("search response missing search")?;
@@ -283,18 +281,6 @@ pub(super) fn issue_since(from: chrono::NaiveDate) -> String {
     chrono::Utc.from_utc_datetime(&start).to_rfc3339()
 }
 
-pub(super) fn graphql_data<T>(resp: GraphqlResponse<T>) -> anyhow::Result<T> {
-    if let Some(errors) = resp.errors {
-        let msg = errors
-            .into_iter()
-            .map(|e| e.message)
-            .collect::<Vec<_>>()
-            .join("; ");
-        anyhow::bail!("GraphQL returned errors: {msg}");
-    }
-    resp.data.context("GraphQL response missing data")
-}
-
 pub(super) fn in_range(
     dt: chrono::DateTime<chrono::Utc>,
     from: chrono::NaiveDate,
@@ -334,12 +320,11 @@ where
             "variables": query.variables(after.clone()),
         });
 
-        let resp = client
-            .graphql::<GraphqlResponse<serde_json::Value>>(&payload)
+        let data = client
+            .graphql::<serde_json::Value>(&payload)
             .await
             .context("GraphQL query failed")?;
 
-        let data = graphql_data(resp)?;
         let connection = data
             .get("viewer")
             .and_then(|viewer| viewer.get(query.connection_field()))
@@ -465,5 +450,148 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, EventKind::PullRequestClosed);
         assert_eq!(items[0].body, None);
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use crate::github::graphql::test_support::{client, mock_response};
+    use serde_json::json;
+    use wiremock::MockServer;
+
+    #[tokio::test]
+    async fn search_reads_count_and_follows_page_cursors() {
+        let server = MockServer::start().await;
+        mock_response(
+            &server,
+            json!({"query": SEARCH_COUNT_QUERY}),
+            json!({"data": {"search": {"issueCount": 2}}}),
+        )
+        .await;
+        for (after, id, next) in [(None, "first", true), (Some("cursor"), "second", false)] {
+            mock_response(
+                &server,
+                json!({
+                    "query": "search document",
+                    "variables": {
+                        "after": after
+                    }
+                }),
+                json!({
+                    "data": {
+                        "search": {
+                            "nodes": [null, {"id": id}],
+                            "pageInfo": {
+                                "hasNextPage": next,
+                                "endCursor": "cursor"
+                            }
+                        }
+                    }
+                }),
+            )
+            .await;
+        }
+        let spec = SearchSpec {
+            query_base: "is:issue",
+            date_field: "closed",
+            query_suffix: None,
+            document: "search document",
+            variables: json!({}),
+        };
+        let date = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let nodes = fetch_search_nodes_range(&client(&server), &spec, date, date)
+            .await
+            .unwrap();
+        assert_eq!(nodes, vec![json!({"id": "first"}), json!({"id": "second"})]);
+    }
+
+    #[tokio::test]
+    async fn viewer_connection_follows_page_cursors() {
+        let server = MockServer::start().await;
+        for (after, next) in [(None, true), (Some("cursor"), false)] {
+            mock_response(
+                &server,
+                json!({
+                    "query": QueryKind::OpenedPullRequests.as_str(),
+                    "variables": {
+                        "after": after
+                    }
+                }),
+                json!({
+                    "data": {
+                        "viewer": {
+                            "pullRequests": {
+                                "nodes": [],
+                                "pageInfo": {
+                                    "hasNextPage": next,
+                                    "endCursor": "cursor"
+                                }
+                            }
+                        }
+                    }
+                }),
+            )
+            .await;
+        }
+        let items = fetch_paginated_json(
+            &client(&server),
+            QueryKind::OpenedPullRequests,
+            |_| Ok(None),
+            |_| Ok(false),
+        )
+        .await
+        .unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn graphql_errors_preserve_metadata_without_retrying_or_returning_partial_data() {
+        for data in [serde_json::Value::Null, json!({"search": {"nodes": []}})] {
+            let server = MockServer::start().await;
+            mock_response(
+                &server,
+                json!({
+                    "query": "query"
+                }),
+                json!({
+                    "data": data,
+                    "errors": [{
+                        "message": "Access denied",
+                        "locations": [{
+                            "line": 1,
+                            "column": 2
+                        }],
+                        "path": ["search", 0],
+                        "extensions": {
+                            "code": "FORBIDDEN"
+                        }
+                    }]
+                }),
+            )
+            .await;
+            let error = graphql_with_retry::<serde_json::Value>(
+                &client(&server),
+                &json!({"query": "query"}),
+                "GraphQL search query failed",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.to_string(), "GraphQL search query failed");
+            let octocrab::Error::Graphql { source, .. } =
+                error.downcast_ref::<octocrab::Error>().unwrap()
+            else {
+                panic!("expected structured GraphQL error")
+            };
+            assert_eq!(source.0[0].message, "Access denied");
+            assert_eq!(source.0[0].locations.as_ref().unwrap()[0].column, 2);
+            assert!(
+                matches!(&source.0[0].path.as_ref().unwrap()[0], octocrab::GraphqlPathSegment::Path(path) if path == "search")
+            );
+            assert_eq!(
+                source.0[0].extensions.as_ref().unwrap()["code"],
+                "FORBIDDEN"
+            );
+        }
     }
 }

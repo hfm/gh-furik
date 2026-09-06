@@ -10,8 +10,9 @@ repository = "https://github.com/hfm/gh-furik"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-octocrab = { version = "0.48.1", default-features = false, features = [
+octocrab = { version = "0.54.1", default-features = false, features = [
     "rustls-aws-lc-rs",
+    "jwt-aws-lc-rs",
     "rustls",
     "rustls-webpki-tokio",
     "default-client",
@@ -26,3 +27,4 @@ futures = "0.3"
 
 [dev-dependencies]
 temp-env = "0.3"
+wiremock = "0.6"

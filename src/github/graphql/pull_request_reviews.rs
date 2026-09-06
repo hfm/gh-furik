@@ -1,6 +1,5 @@
 use super::fetch::{
-    MAX_PAGES, SearchSpec, fetch_search_nodes_range, graphql_data, graphql_with_retry, in_range,
-    parse_datetime,
+    MAX_PAGES, SearchSpec, fetch_search_nodes_range, graphql_with_retry, in_range, parse_datetime,
 };
 use super::queries::{
     PULL_REQUEST_REVIEWS_QUERY, REVIEW_COMMENTS_QUERY, REVIEWED_PULL_REQUESTS_QUERY,
@@ -151,13 +150,12 @@ async fn fetch_review_events(
                 "after": after,
             },
         });
-        let response = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
+        let data = graphql_with_retry::<serde_json::Value>(
             client,
             &payload,
             "GraphQL pull request reviews query failed",
         )
         .await?;
-        let data = graphql_data(response)?;
         let reviews = data
             .get("node")
             .and_then(|node| node.get("reviews"))
@@ -220,13 +218,12 @@ async fn fetch_review_comments(
             "query": REVIEW_COMMENTS_QUERY,
             "variables": { "id": review_id, "after": after },
         });
-        let response = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
+        let data = graphql_with_retry::<serde_json::Value>(
             client,
             &payload,
             "GraphQL review comments query failed",
         )
         .await?;
-        let data = graphql_data(response)?;
         let comments = data
             .get("node")
             .and_then(|node| node.get("comments"))
@@ -375,5 +372,101 @@ mod tests {
 
         assert_eq!(next_cursor(&more).unwrap().as_deref(), Some("cursor-1"));
         assert_eq!(next_cursor(&done).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use crate::github::graphql::test_support::{client, mock_response};
+    use serde_json::json;
+    use wiremock::MockServer;
+
+    #[tokio::test]
+    async fn reviews_and_comments_read_graphql_data() {
+        let server = MockServer::start().await;
+        mock_response(
+            &server,
+            json!({
+                "query": PULL_REQUEST_REVIEWS_QUERY,
+                "variables": {
+                    "id": "pr",
+                    "author": "me",
+                    "after": null
+                }
+            }),
+            json!({
+                "data": {
+                    "node": {
+                        "reviews": {
+                            "nodes": [{
+                                "id": "review",
+                                "submittedAt": "2025-01-01T00:00:00Z",
+                                "url": "https://example.test/review",
+                                "body": "Approved"
+                            }],
+                            "pageInfo": {
+                                "hasNextPage": false,
+                                "endCursor": null
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+        mock_response(
+            &server,
+            json!({
+                "query": REVIEW_COMMENTS_QUERY,
+                "variables": {
+                    "id": "review",
+                    "after": null
+                }
+            }),
+            json!({
+                "data": {
+                    "node": {
+                        "comments": {
+                            "nodes": [{
+                                "author": {
+                                    "login": "me"
+                                },
+                                "createdAt": "2025-01-01T00:00:00Z",
+                                "url": "https://example.test/comment",
+                                "body": "Looks good"
+                            }],
+                            "pageInfo": {
+                                "hasNextPage": false,
+                                "endCursor": null
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+        let date = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let items = fetch_review_events(
+            &client(&server),
+            "me",
+            &json!({
+                "id": "pr",
+                "title": "Change",
+                "url": "https://example.test/pr",
+                "repository": {
+                    "nameWithOwner": "o/r"
+                }
+            }),
+            date,
+            date,
+        )
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, EventKind::PullRequestReview);
+        assert_eq!(items[0].body.as_deref(), Some("Approved"));
+        assert_eq!(items[1].kind, EventKind::PullRequestReviewComment);
+        assert_eq!(items[1].body.as_deref(), Some("Looks good"));
     }
 }
