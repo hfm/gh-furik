@@ -9,6 +9,13 @@ use super::types::*;
 use anyhow::Context;
 use valq::query_value;
 
+#[derive(Clone)]
+struct ReviewSubject {
+    title: String,
+    url: String,
+    repository: String,
+}
+
 pub(crate) async fn query_pull_request_review_contributions(
     client: &crate::github::Client,
     from: chrono::NaiveDate,
@@ -23,103 +30,57 @@ pub(crate) async fn query_pull_request_review_contributions(
         date_field: "updated",
         query_suffix: Some(format!("created:<={to}")),
         document: REVIEWED_PULL_REQUESTS_QUERY,
-        variables: serde_json::json!({ "author": client.viewer_login() }),
+        variables: serde_json::json!({}),
     };
     // A PR keeps receiving updates after the review, so the search window must extend to today.
     let search_to = to.max(chrono::Utc::now().date_naive());
     let nodes = fetch_search_nodes_range(client.octocrab(), &spec, from, search_to).await?;
 
     let mut out = Vec::new();
-    for node in &nodes {
-        out.extend(event_items_from_reviewed_pull_request(
-            node,
-            client.viewer_login(),
-            from,
-            to,
-        )?);
-        out.extend(fetch_additional_review_events(client, node, from, to).await?);
+    let mut review_tasks = tokio::task::JoinSet::new();
+    for node in nodes {
+        let octocrab = client.octocrab().clone();
+        let viewer_login = client.viewer_login().to_string();
+        review_tasks.spawn(async move {
+            fetch_review_events(&octocrab, &viewer_login, &node, from, to).await
+        });
+        if review_tasks.len() >= 4 {
+            collect_event_task(&mut review_tasks, &mut out).await?;
+        }
+    }
+    while !review_tasks.is_empty() {
+        collect_event_task(&mut review_tasks, &mut out).await?;
     }
     Ok(out)
 }
 
-fn event_items_from_reviewed_pull_request(
-    node: &serde_json::Value,
-    viewer_login: &str,
-    from: chrono::NaiveDate,
-    to: chrono::NaiveDate,
-) -> anyhow::Result<Vec<EventItem>> {
-    let mut out = Vec::new();
-
-    let subject_title = query_value!(node.title -> str).expect("pull request missing title");
-    let subject_url = query_value!(node.url -> str).expect("pull request missing url");
-    let repository = query_value!(node.repository["nameWithOwner"] -> str)
-        .expect("pull request missing repository nameWithOwner");
-
-    let Some(reviews) = query_value!(node.reviews.nodes -> array) else {
-        return Ok(out);
-    };
-
-    for review in reviews.iter().filter(|review| !review.is_null()) {
-        out.extend(event_items_from_review(
-            review,
-            subject_title,
-            subject_url,
-            repository,
-            viewer_login,
-            from,
-            to,
-        )?);
-    }
-
-    Ok(out)
-}
-
-fn event_items_from_review(
+fn event_item_from_review(
     review: &serde_json::Value,
     subject_title: &str,
     subject_url: &str,
     repository: &str,
-    viewer_login: &str,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
-) -> anyhow::Result<Vec<EventItem>> {
+) -> anyhow::Result<Option<EventItem>> {
     let Some(submitted_at) = query_value!(review["submittedAt"] -> str) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let submitted_at = parse_datetime(submitted_at)?;
-    let mut out = Vec::new();
-
-    if in_range(submitted_at, from, to) {
-        out.push(EventItem {
-            kind: EventKind::PullRequestReview,
-            created_at: submitted_at,
-            url: query_value!(review.url -> str)
-                .expect("review missing url")
-                .to_string(),
-            body: query_value!(review.body -> str).map(str::to_string),
-            repository: repository.to_string(),
-            subject_title: subject_title.to_string(),
-            subject_url: subject_url.to_string(),
-        });
+    if !in_range(submitted_at, from, to) {
+        return Ok(None);
     }
 
-    if let Some(comments) = query_value!(review.comments.nodes -> array) {
-        for comment in comments.iter().filter(|comment| !comment.is_null()) {
-            if let Some(item) = event_item_from_review_comment(
-                comment,
-                subject_title,
-                subject_url,
-                repository,
-                viewer_login,
-                from,
-                to,
-            )? {
-                out.push(item);
-            }
-        }
-    }
-
-    Ok(out)
+    Ok(Some(EventItem {
+        kind: EventKind::PullRequestReview,
+        created_at: submitted_at,
+        url: query_value!(review.url -> str)
+            .expect("review missing url")
+            .to_string(),
+        body: query_value!(review.body -> str).map(str::to_string),
+        repository: repository.to_string(),
+        subject_title: subject_title.to_string(),
+        subject_url: subject_url.to_string(),
+    }))
 }
 
 fn event_item_from_review_comment(
@@ -158,56 +119,40 @@ fn event_item_from_review_comment(
     }))
 }
 
-async fn fetch_additional_review_events(
-    client: &crate::github::Client,
+async fn fetch_review_events(
+    client: &octocrab::Octocrab,
+    viewer_login: &str,
     pull_request: &serde_json::Value,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
     let pull_request_id = query_value!(pull_request.id -> str).expect("pull request missing id");
-    let subject_title =
-        query_value!(pull_request.title -> str).expect("pull request missing title");
-    let subject_url = query_value!(pull_request.url -> str).expect("pull request missing url");
-    let repository = query_value!(pull_request.repository["nameWithOwner"] -> str)
-        .expect("pull request missing repository nameWithOwner");
+    let subject = ReviewSubject {
+        title: query_value!(pull_request.title -> str)
+            .expect("pull request missing title")
+            .to_string(),
+        url: query_value!(pull_request.url -> str)
+            .expect("pull request missing url")
+            .to_string(),
+        repository: query_value!(pull_request.repository["nameWithOwner"] -> str)
+            .expect("pull request missing repository nameWithOwner")
+            .to_string(),
+    };
     let mut out = Vec::new();
+    let mut comment_tasks = tokio::task::JoinSet::new();
 
-    if let Some(reviews) = query_value!(pull_request.reviews.nodes -> array) {
-        for review in reviews.iter().filter(|review| !review.is_null()) {
-            out.extend(
-                fetch_additional_review_comments(
-                    client,
-                    review,
-                    subject_title,
-                    subject_url,
-                    repository,
-                    from,
-                    to,
-                )
-                .await?,
-            );
-        }
-    }
-
-    let mut after = next_cursor(
-        pull_request
-            .get("reviews")
-            .context("pull request missing reviews")?,
-    )?;
+    let mut after: Option<String> = None;
     for _ in 0..MAX_PAGES {
-        let Some(cursor) = after.take() else {
-            break;
-        };
         let payload = serde_json::json!({
             "query": PULL_REQUEST_REVIEWS_QUERY,
             "variables": {
                 "id": pull_request_id,
-                "author": client.viewer_login(),
-                "after": cursor,
+                "author": viewer_login,
+                "after": after,
             },
         });
         let response = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
-            client.octocrab(),
+            client,
             &payload,
             "GraphQL pull request reviews query failed",
         )
@@ -220,41 +165,46 @@ async fn fetch_additional_review_events(
 
         if let Some(nodes) = reviews.get("nodes").and_then(|nodes| nodes.as_array()) {
             for review in nodes.iter().filter(|review| !review.is_null()) {
-                out.extend(event_items_from_review(
+                if let Some(item) = event_item_from_review(
                     review,
-                    subject_title,
-                    subject_url,
-                    repository,
-                    client.viewer_login(),
+                    &subject.title,
+                    &subject.url,
+                    &subject.repository,
                     from,
                     to,
-                )?);
-                out.extend(
-                    fetch_additional_review_comments(
-                        client,
-                        review,
-                        subject_title,
-                        subject_url,
-                        repository,
-                        from,
-                        to,
-                    )
-                    .await?,
-                );
+                )? {
+                    out.push(item);
+                }
+                let octocrab = client.clone();
+                let viewer_login = viewer_login.to_string();
+                let review = review.clone();
+                let subject = subject.clone();
+                comment_tasks.spawn(async move {
+                    fetch_review_comments(&octocrab, &viewer_login, &review, &subject, from, to)
+                        .await
+                });
+                if comment_tasks.len() >= 8 {
+                    collect_event_task(&mut comment_tasks, &mut out).await?;
+                }
             }
         }
         after = next_cursor(reviews)?;
+        if after.is_none() {
+            break;
+        }
+    }
+    while !comment_tasks.is_empty() {
+        collect_event_task(&mut comment_tasks, &mut out).await?;
     }
 
     Ok(out)
 }
 
-async fn fetch_additional_review_comments(
-    client: &crate::github::Client,
+async fn fetch_review_comments(
+    client: &octocrab::Octocrab,
+    viewer_login: &str,
     review: &serde_json::Value,
-    subject_title: &str,
-    subject_url: &str,
-    repository: &str,
+    subject: &ReviewSubject,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<EventItem>> {
@@ -262,22 +212,16 @@ async fn fetch_additional_review_comments(
         return Ok(Vec::new());
     }
     let review_id = query_value!(review.id -> str).expect("review missing id");
-    let comments = review
-        .get("comments")
-        .context("review missing comments connection")?;
-    let mut after = next_cursor(comments)?;
+    let mut after: Option<String> = None;
     let mut out = Vec::new();
 
     for _ in 0..MAX_PAGES {
-        let Some(cursor) = after.take() else {
-            break;
-        };
         let payload = serde_json::json!({
             "query": REVIEW_COMMENTS_QUERY,
-            "variables": { "id": review_id, "after": cursor },
+            "variables": { "id": review_id, "after": after },
         });
         let response = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
-            client.octocrab(),
+            client,
             &payload,
             "GraphQL review comments query failed",
         )
@@ -292,10 +236,10 @@ async fn fetch_additional_review_comments(
             for comment in nodes.iter().filter(|comment| !comment.is_null()) {
                 if let Some(item) = event_item_from_review_comment(
                     comment,
-                    subject_title,
-                    subject_url,
-                    repository,
-                    client.viewer_login(),
+                    &subject.title,
+                    &subject.url,
+                    &subject.repository,
+                    viewer_login,
                     from,
                     to,
                 )? {
@@ -304,9 +248,25 @@ async fn fetch_additional_review_comments(
             }
         }
         after = next_cursor(comments)?;
+        if after.is_none() {
+            break;
+        }
     }
 
     Ok(out)
+}
+
+async fn collect_event_task(
+    tasks: &mut tokio::task::JoinSet<anyhow::Result<Vec<EventItem>>>,
+    out: &mut Vec<EventItem>,
+) -> anyhow::Result<()> {
+    let items = tasks
+        .join_next()
+        .await
+        .context("review comment task missing")?
+        .context("review comment task failed")??;
+    out.extend(items);
+    Ok(())
 }
 
 fn next_cursor(connection: &serde_json::Value) -> anyhow::Result<Option<String>> {
@@ -336,73 +296,72 @@ mod tests {
         NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
     }
 
-    fn pull_request(reviews: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
-            "__typename": "PullRequest",
-            "url": "https://example.test/pull/1",
-            "title": "Sample PR",
-            "repository": { "nameWithOwner": "owner/repo" },
-            "reviews": { "nodes": reviews },
-        })
-    }
-
     #[test]
-    fn emits_review_and_comments_within_range() {
-        let node = pull_request(serde_json::json!([{
+    fn emits_review_within_range() {
+        let review = serde_json::json!({
             "state": "APPROVED",
             "submittedAt": "2025-01-02T10:00:00Z",
             "url": "https://example.test/pull/1#pullrequestreview-1",
-            "body": "LGTM",
-            "comments": { "nodes": [
-                { "createdAt": "2025-01-02T09:00:00Z", "url": "https://example.test/pull/1#discussion_r1", "body": "nit", "author": { "login": "viewer" } },
-                { "createdAt": "2025-01-02T09:30:00Z", "url": "https://example.test/pull/1#discussion_r2", "body": "reply", "author": { "login": "someone-else" } },
-                { "createdAt": "2025-02-01T09:00:00Z", "url": "https://example.test/pull/1#discussion_r3", "body": "late", "author": { "login": "viewer" } }
-            ] }
-        }]));
+            "body": "LGTM"
+        });
 
-        let items = event_items_from_reviewed_pull_request(
-            &node,
-            "viewer",
+        let item = event_item_from_review(
+            &review,
+            "Sample PR",
+            "https://example.test/pull/1",
+            "owner/repo",
             date("2025-01-01"),
             date("2025-01-31"),
         )
+        .unwrap()
         .unwrap();
 
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].kind, EventKind::PullRequestReview);
-        assert_eq!(items[0].body.as_deref(), Some("LGTM"));
-        assert_eq!(items[1].kind, EventKind::PullRequestReviewComment);
-        assert_eq!(items[1].url, "https://example.test/pull/1#discussion_r1");
+        assert_eq!(item.kind, EventKind::PullRequestReview);
+        assert_eq!(item.body.as_deref(), Some("LGTM"));
     }
 
     #[test]
-    fn skips_reviews_outside_range_and_pending_reviews() {
-        let node = pull_request(serde_json::json!([
-            {
-                "state": "APPROVED",
-                "submittedAt": "2024-12-31T23:00:00Z",
-                "url": "https://example.test/pull/1#pullrequestreview-1",
-                "body": "",
-                "comments": { "nodes": [] }
-            },
-            {
-                "state": "PENDING",
-                "submittedAt": null,
-                "url": "https://example.test/pull/1#pullrequestreview-2",
-                "body": "",
-                "comments": { "nodes": [] }
-            }
-        ]));
+    fn emits_only_viewer_review_comments_within_range() {
+        let viewer_comment = serde_json::json!({
+            "createdAt": "2025-01-02T09:00:00Z",
+            "url": "https://example.test/pull/1#discussion_r1",
+            "body": "nit",
+            "author": { "login": "viewer" }
+        });
+        let other_comment = serde_json::json!({
+            "createdAt": "2025-01-02T09:30:00Z",
+            "url": "https://example.test/pull/1#discussion_r2",
+            "body": "reply",
+            "author": { "login": "someone-else" }
+        });
 
-        let items = event_items_from_reviewed_pull_request(
-            &node,
+        let item = event_item_from_review_comment(
+            &viewer_comment,
+            "Sample PR",
+            "https://example.test/pull/1",
+            "owner/repo",
             "viewer",
             date("2025-01-01"),
             date("2025-01-31"),
         )
+        .unwrap()
         .unwrap();
 
-        assert!(items.is_empty());
+        assert_eq!(item.kind, EventKind::PullRequestReviewComment);
+        assert_eq!(item.url, "https://example.test/pull/1#discussion_r1");
+        assert!(
+            event_item_from_review_comment(
+                &other_comment,
+                "Sample PR",
+                "https://example.test/pull/1",
+                "owner/repo",
+                "viewer",
+                date("2025-01-01"),
+                date("2025-01-31"),
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]

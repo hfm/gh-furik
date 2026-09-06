@@ -11,20 +11,6 @@ query($id: ID!, $author: String!, $after: String) {
           submittedAt
           url
           body
-          comments(first: 100) {
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-            nodes {
-              createdAt
-              url
-              body
-              author {
-                login
-              }
-            }
-          }
         }
       }
     }

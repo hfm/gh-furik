@@ -1,4 +1,4 @@
-query($query: String!, $author: String!, $after: String) {
+query($query: String!, $after: String) {
   search(query: $query, type: ISSUE, first: 50, after: $after) {
     issueCount
     pageInfo {
@@ -13,32 +13,6 @@ query($query: String!, $author: String!, $after: String) {
         title
         repository {
           nameWithOwner
-        }
-        reviews(first: 50, author: $author) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            submittedAt
-            url
-            body
-            comments(first: 100) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                createdAt
-                url
-                body
-                author {
-                  login
-                }
-              }
-            }
-          }
         }
       }
     }
