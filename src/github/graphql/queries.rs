@@ -6,8 +6,11 @@ pub(crate) const OPENED_ISSUES_SINCE_QUERY: &str =
 pub(crate) const OPENED_PULL_REQUESTS_QUERY: &str =
     include_str!("queries/opened_pull_requests.graphql");
 
-pub(crate) const REVIEW_CONTRIBUTIONS_QUERY: &str =
-    include_str!("queries/review_contributions.graphql");
+pub(crate) const REVIEWED_PULL_REQUESTS_QUERY: &str =
+    include_str!("queries/reviewed_pull_requests.graphql");
+pub(crate) const PULL_REQUEST_REVIEWS_QUERY: &str =
+    include_str!("queries/pull_request_reviews.graphql");
+pub(crate) const REVIEW_COMMENTS_QUERY: &str = include_str!("queries/review_comments.graphql");
 pub(crate) const SEARCH_QUERY: &str = include_str!("queries/search.graphql");
 pub(crate) const SEARCH_COUNT_QUERY: &str = include_str!("queries/search_count.graphql");
 

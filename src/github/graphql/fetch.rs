@@ -4,12 +4,20 @@ use std::time::Duration;
 
 use valq::query_value;
 
-use super::queries::{QueryKind, SEARCH_COUNT_QUERY, SEARCH_QUERY};
+use super::queries::{QueryKind, SEARCH_COUNT_QUERY};
 use super::types::*;
 
 pub(super) const MAX_PAGES: usize = 1000;
 const SEARCH_LIMIT: i32 = 1000;
 const SEARCH_RETRIES: usize = 3;
+
+pub(super) struct SearchSpec {
+    pub(super) query_base: &'static str,
+    pub(super) date_field: &'static str,
+    pub(super) query_suffix: Option<String>,
+    pub(super) document: &'static str,
+    pub(super) variables: serde_json::Value,
+}
 
 pub(super) fn event_items_from_search_node(
     node: &serde_json::Value,
@@ -87,22 +95,22 @@ fn actor_matches(actor_login: Option<&str>, viewer_login: &str) -> bool {
 
 pub(super) async fn fetch_search_nodes_range(
     client: &octocrab::Octocrab,
-    query_base: &str,
+    spec: &SearchSpec,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let ranges = split_ranges_by_count(client, query_base, from, to).await?;
+    let ranges = split_ranges_by_count(client, spec, from, to).await?;
     let mut out = Vec::new();
     for (start, end) in ranges {
-        let query = search_query(query_base, start, end);
-        out.extend(fetch_search_nodes(client, &query).await?);
+        let query = search_query(spec, start, end);
+        out.extend(fetch_search_nodes(client, spec, &query).await?);
     }
     Ok(out)
 }
 
 async fn split_ranges_by_count(
     client: &octocrab::Octocrab,
-    query_base: &str,
+    spec: &SearchSpec,
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> anyhow::Result<Vec<(chrono::NaiveDate, chrono::NaiveDate)>> {
@@ -115,7 +123,7 @@ async fn split_ranges_by_count(
             continue;
         }
 
-        let query = search_query(query_base, start, end);
+        let query = search_query(spec, start, end);
         let count = fetch_search_count(client, &query).await?;
         if count == 0 {
             continue;
@@ -142,7 +150,7 @@ async fn split_ranges_by_count(
     Ok(out)
 }
 
-async fn graphql_with_retry<T>(
+pub(super) async fn graphql_with_retry<T>(
     client: &octocrab::Octocrab,
     payload: &serde_json::Value,
     context: &'static str,
@@ -194,15 +202,21 @@ async fn fetch_search_count(client: &octocrab::Octocrab, query: &str) -> anyhow:
 
 async fn fetch_search_nodes(
     client: &octocrab::Octocrab,
+    spec: &SearchSpec,
     query: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let mut after: Option<String> = None;
     let mut out = Vec::new();
 
     for _ in 0..MAX_PAGES {
+        let mut variables = spec.variables.clone();
+        variables["query"] = serde_json::Value::String(query.to_string());
+        variables["after"] = after
+            .clone()
+            .map_or(serde_json::Value::Null, serde_json::Value::String);
         let payload = serde_json::json!({
-            "query": SEARCH_QUERY,
-            "variables": { "query": query, "after": after.clone() },
+            "query": spec.document,
+            "variables": variables,
         });
 
         let resp = graphql_with_retry::<GraphqlResponse<serde_json::Value>>(
@@ -244,12 +258,19 @@ async fn fetch_search_nodes(
     Ok(out)
 }
 
-fn search_query(query_base: &str, from: chrono::NaiveDate, to: chrono::NaiveDate) -> String {
-    format!(
-        "{query_base} involves:@me closed:{}..{}",
+fn search_query(spec: &SearchSpec, from: chrono::NaiveDate, to: chrono::NaiveDate) -> String {
+    let mut query = format!(
+        "{} {}:{}..{}",
+        spec.query_base,
+        spec.date_field,
         from.format("%Y-%m-%d"),
         to.format("%Y-%m-%d")
-    )
+    );
+    if let Some(suffix) = &spec.query_suffix {
+        query.push(' ');
+        query.push_str(suffix);
+    }
+    query
 }
 
 fn midpoint_date(from: chrono::NaiveDate, to: chrono::NaiveDate) -> chrono::NaiveDate {
@@ -396,6 +417,26 @@ mod tests {
             NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
         ));
+    }
+
+    #[test]
+    fn search_query_appends_optional_qualifier() {
+        let spec = SearchSpec {
+            query_base: "is:pr reviewed-by:@me",
+            date_field: "updated",
+            query_suffix: Some("created:<=2025-01-31".to_string()),
+            document: "",
+            variables: serde_json::json!({}),
+        };
+
+        assert_eq!(
+            search_query(
+                &spec,
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+            ),
+            "is:pr reviewed-by:@me updated:2025-01-01..2025-02-01 created:<=2025-01-31"
+        );
     }
 
     #[test]

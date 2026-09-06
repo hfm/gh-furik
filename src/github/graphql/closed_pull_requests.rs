@@ -1,4 +1,5 @@
-use super::fetch::{event_items_from_search_node, fetch_search_nodes_range};
+use super::fetch::{SearchSpec, event_items_from_search_node, fetch_search_nodes_range};
+use super::queries::SEARCH_QUERY;
 use super::types::{EventItem, EventKind};
 use std::collections::HashMap;
 
@@ -11,7 +12,14 @@ pub(crate) async fn query_closed_pull_requests(
         return Ok(Vec::new());
     }
 
-    let nodes = fetch_search_nodes_range(client.octocrab(), "is:pr", from, to).await?;
+    let spec = SearchSpec {
+        query_base: "is:pr involves:@me",
+        date_field: "closed",
+        query_suffix: None,
+        document: SEARCH_QUERY,
+        variables: serde_json::json!({}),
+    };
+    let nodes = fetch_search_nodes_range(client.octocrab(), &spec, from, to).await?;
 
     let items: Vec<_> = nodes
         .into_iter()
