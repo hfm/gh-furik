@@ -32,14 +32,3 @@ pub struct EventItem {
     pub subject_title: String,
     pub subject_url: String,
 }
-
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct GraphqlResponse<T> {
-    pub data: Option<T>,
-    pub errors: Option<Vec<GraphqlError>>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct GraphqlError {
-    pub message: String,
-}
